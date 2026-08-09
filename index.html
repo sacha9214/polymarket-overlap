@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Polymarket Overlap — Smart Money Tracker</title>
+<style>
+  :root{
+    --bg:#0b0d10; --panel:#12151a; --panel2:#181c23; --border:#232832;
+    --text:#e9ecf1; --muted:#8b93a1; --dim:#5b6270;
+    --green:#22c55e; --green-bg:rgba(34,197,94,.12);
+    --red:#ef4444; --red-bg:rgba(239,68,68,.12);
+    --gold:#eab308; --gold-bg:rgba(234,179,8,.10);
+    --blue:#3b82f6;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,sans-serif;
+    --mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.5;min-height:100vh}
+  .num{font-family:var(--mono)}
+
+  header{display:flex;align-items:center;gap:14px;padding:16px 32px;border-bottom:1px solid var(--border);position:sticky;top:0;background:rgba(11,13,16,.9);backdrop-filter:blur(10px);z-index:10}
+  .logo{font-weight:800;letter-spacing:.5px;font-size:17px}
+  .logo span{color:var(--green)}
+  .livepill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--green);background:var(--green-bg);border-radius:999px;padding:4px 12px;font-weight:600}
+  .livepill .dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  header .right{margin-left:auto;color:var(--dim);font-size:12px}
+
+  main{max-width:980px;margin:0 auto;padding:32px 20px 80px}
+
+  /* ---- panneau recherche ---- */
+  .search-panel{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px 24px;margin-bottom:20px}
+  .search-panel h1{font-size:18px;font-weight:700;margin-bottom:4px}
+  .search-panel p{color:var(--muted);font-size:13px;margin-bottom:14px}
+  textarea{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:var(--mono);font-size:13px;padding:12px;min-height:64px;resize:vertical}
+  textarea:focus{outline:none;border-color:var(--green)}
+  .search-actions{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  button{background:var(--green);color:#04120a;border:none;border-radius:10px;padding:10px 20px;font-family:var(--sans);font-size:14px;font-weight:700;cursor:pointer;transition:filter .15s}
+  button:hover{filter:brightness(1.12)}
+  button.ghost{background:transparent;color:var(--muted);border:1px solid var(--border);font-weight:500}
+  button.ghost:hover{color:var(--text);border-color:var(--dim)}
+  .note{color:var(--dim);font-size:12px;margin-left:auto}
+
+  /* ---- barre de contrôles ---- */
+  .controls{display:none;flex-wrap:wrap;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:12px 14px;margin-bottom:8px}
+  .controls select,.controls input[type=text],.controls input[type=number]{
+    background:var(--panel2);border:1px solid var(--border);border-radius:9px;color:var(--text);
+    font-family:var(--sans);font-size:13px;padding:8px 10px;cursor:pointer}
+  .controls select:focus,.controls input:focus{outline:none;border-color:var(--green)}
+  .controls input[type=text]{width:190px;cursor:text}
+  .controls input[type=number]{width:74px;cursor:text}
+  .ctl{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+  .toggle{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;user-select:none;padding:8px 10px;border:1px solid var(--border);border-radius:9px;background:var(--panel2)}
+  .toggle input{accent-color:var(--green);cursor:pointer}
+
+  .summary{display:none;align-items:baseline;gap:10px;flex-wrap:wrap;margin:18px 2px 14px}
+  .summary b{font-size:17px}
+  .summary .sub{color:var(--muted);font-size:13px}
+  .chips{display:none;flex-wrap:wrap;gap:7px;margin:0 2px 20px}
+  .chip{display:inline-flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:4px 11px 4px 5px;font-size:12px;color:#cfd4dc}
+  .chip .avatar{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;color:#0a0a0b;font-weight:700}
+  .chip .wpnl{font-size:11px;font-family:var(--mono)}
+  .chip .wpnl.pos{color:var(--green)} .chip .wpnl.neg{color:var(--red)}
+
+  /* ---- cartes ---- */
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:20px 22px;margin-bottom:12px;transition:border-color .15s}
+  .card:hover{border-color:#2f3542}
+  .card.top1{border-color:rgba(234,179,8,.55);background:linear-gradient(180deg,rgba(234,179,8,.05),var(--panel) 60%)}
+  .best-banner{display:inline-flex;align-items:center;gap:6px;color:var(--gold);font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
+
+  .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .rank{color:var(--dim);font-size:13px;font-weight:700;font-family:var(--mono);min-width:28px}
+  .verdict{font-size:13px;font-weight:800;padding:6px 14px;border-radius:8px;letter-spacing:.5px}
+  .verdict.buy{background:var(--green-bg);color:var(--green)}
+  .verdict.avoid{background:var(--red-bg);color:var(--red)}
+  .verdict.hold{background:rgba(139,147,161,.12);color:var(--muted)}
+  .meta{margin-left:auto;color:var(--dim);font-size:12px}
+
+  .card h3{font-size:16px;font-weight:650;margin-bottom:4px}
+  .why{color:var(--muted);font-size:13px;margin-bottom:14px}
+  .why b{color:var(--text)}
+
+  .statrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+  .stat{background:var(--panel2);border-radius:10px;padding:10px 12px}
+  .stat .k{color:var(--dim);font-size:11px;margin-bottom:2px}
+  .stat .v{font-size:16px;font-weight:700;font-family:var(--mono)}
+  .stat .v .sub{font-size:11px;font-weight:400;color:var(--muted);font-family:var(--sans)}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+
+  .card-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .card a.pm{color:var(--green);font-size:13px;text-decoration:none;font-weight:600}
+  .card a.pm:hover{text-decoration:underline}
+  details{flex:1}
+  summary{color:var(--dim);font-size:13px;cursor:pointer;user-select:none;list-style:none}
+  summary::before{content:'▸ '} details[open] summary::before{content:'▾ '}
+  summary:hover{color:var(--muted)}
+  .brow{display:flex;align-items:center;gap:12px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--border)}
+  .brow:last-child{border-bottom:none}
+  .brow .avatar{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;color:#0a0a0b;font-weight:700;flex-shrink:0}
+  .brow .wname{min-width:140px;color:#cfd4dc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .brow .pnl{min-width:110px;font-family:var(--mono);font-size:12px}
+  .brow .shares{color:var(--muted);flex:1;font-size:12px}
+  .brow .val{font-weight:700;font-family:var(--mono);margin-left:auto}
+
+  .empty{color:var(--muted);text-align:center;padding:60px 0;font-size:14px}
+  .spinner{color:var(--green);text-align:center;padding:60px 0;font-size:14px;animation:pulse 1.2s infinite}
+  .error{color:var(--red);padding:14px;background:var(--red-bg);border:1px solid rgba(239,68,68,.3);border-radius:10px;margin-bottom:16px;font-size:13px;display:none}
+  .modelnote{display:none;color:var(--dim);font-size:12px;margin:0 2px 18px;line-height:1.6}
+  footer{text-align:center;color:var(--dim);font-size:12px;padding:30px;line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Polymarket <span>Overlap</span></div>
+  <span class="livepill" id="livepill" style="display:none"><span class="dot"></span>LIVE</span>
+  <div class="right">smart money tracker</div>
+</header>
+
+<main>
+  <div class="search-panel">
+    <h1>Suivre les positions communes des meilleurs traders</h1>
+    <p>Colle des adresses de wallets Polymarket (0x…) ou utilise le preset. L'outil croise leurs positions en direct et te dit sur quels marchés entrer.</p>
+    <textarea id="input" placeholder="0x1234…, 0xabcd…"></textarea>
+    <div class="search-actions">
+      <button id="analyze">Analyser</button>
+      <button class="ghost" id="presetBtn">⚡ Top 10 traders de la semaine</button>
+      <button class="ghost" id="refreshBtn">↻</button>
+      <span class="note" id="note"></span>
+    </div>
+  </div>
+
+  <div class="error" id="error"></div>
+
+  <div class="controls" id="controls">
+    <div class="ctl">Classement
+      <select id="sortSel">
+        <option value="best">🎯 Meilleure entrée</option>
+        <option value="gain">💰 Gain potentiel</option>
+        <option value="proba">🛡️ Plus sûr</option>
+        <option value="wallets">👥 Nb de wallets</option>
+        <option value="value">💵 Argent posé</option>
+        <option value="resolves">⏳ Résout bientôt</option>
+      </select>
+    </div>
+    <div class="ctl">Résout
+      <select id="daysSel">
+        <option value="0">Peu importe</option>
+        <option value="1">Aujourd'hui</option>
+        <option value="7">Cette semaine</option>
+        <option value="30">Ce mois</option>
+        <option value="90">Sous 3 mois</option>
+      </select>
+    </div>
+    <div class="ctl">Min
+      <select id="minSel">
+        <option value="2">2 wallets</option>
+        <option value="3">3 wallets</option>
+      </select>
+    </div>
+    <input type="text" id="query" placeholder="🔍 Filtrer (bitcoin, NBA…)">
+    <div class="ctl">Ma mise <input type="number" id="stake" value="100" min="1"> $</div>
+    <label class="toggle"><input type="checkbox" id="onlyProfit"> rentables seulement</label>
+    <label class="toggle"><input type="checkbox" id="autoRefresh"> auto ↻ 60s</label>
+  </div>
+
+  <div class="summary" id="summary">
+    <b><span id="countPos">0</span> opportunités</b>
+    <span class="sub">détectées sur <span id="countW">0</span> wallets · triées par <span id="sortLabel">meilleure entrée</span></span>
+  </div>
+  <div class="chips" id="chips"></div>
+  <p class="modelnote" id="modelnote">La <b>proba estimée</b> part du prix du marché et l'ajuste (±12 pts max) selon la qualité des wallets positionnés : PnL, taille de mise, prix d'entrée. <span style="color:var(--green)">ACHETER</span> = le smart money voit plus haut que le marché · <span style="color:var(--red)">ÉVITER</span> = les wallets dessus sont perdants ou mal entrés. Heuristique — pas un conseil financier.</p>
+
+  <div id="results"></div>
+</main>
+<footer>Données live · data-api.polymarket.com · non affilié à Polymarket<br>Pas un conseil financier. Ne mise que ce que tu peux perdre.</footer>
+
+<script>
+const API = 'https://data-api.polymarket.com';
+const GAMMA = 'https://gamma-api.polymarket.com';
+const nameCache = new Map();
+const weekPnlCache = new Map();
+
+const COLORS = ['#22c55e','#eab308','#3b82f6','#ec4899','#a855f7','#f97316','#14b8a6','#f43f5e','#84cc16','#06b6d4'];
+let wallets = [], overlaps = [];
+let sortBy='best', filterDays=0, minWallets=2, onlyProfit=false, query='', stake=100;
+let autoTimer=null;
+const SORT_LABELS = {best:'meilleure entrée', gain:'gain potentiel', proba:'sécurité', wallets:'nb de wallets', value:'argent posé', resolves:'échéance'};
+
+const $ = id => document.getElementById(id);
+const short = a => a.slice(0,6)+'…'+a.slice(-4);
+const clamp = (x,a,b) => Math.max(a, Math.min(b, x));
+function fmtUsd(v){
+  if (v>=1e6) return '$'+(v/1e6).toFixed(1)+'M';
+  if (v>=1e3) return '$'+(v/1e3).toFixed(1)+'K';
+  return '$'+v.toFixed(0);
+}
+const daysLeft = end => end ? Math.ceil((new Date(end)-Date.now())/864e5) : null;
+async function fetchJson(url){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error(r.status+' sur '+url);
+  return r.json();
+}
+
+// ------- chargement -------
+async function loadWallet(addr, i){
+  const positions = await fetchJson(`${API}/positions?user=${addr}&limit=500&sizeThreshold=1`);
+  let name = nameCache.get(addr.toLowerCase()) || short(addr);
+  if (!nameCache.has(addr.toLowerCase())) {
+    const prof = await fetchJson(`${GAMMA}/public-profile?address=${addr}`).catch(()=>null);
+    if (prof) {
+      if (prof.name && !/^0x[0-9a-fA-F]{40}/.test(prof.name)) name = prof.name;
+      else if (prof.pseudonym) name = prof.pseudonym;
+    }
+  }
+  const pnl = positions.reduce((s,p)=>s+(p.cashPnl||0),0);
+  const weekPnl = weekPnlCache.get(addr.toLowerCase()) ?? null;
+  const q = v => v>=0 ? Math.min(1, Math.log10(1+v)/6) : -Math.min(1, Math.log10(1-v)/6);
+  const quality = weekPnl!=null ? (q(pnl)+q(weekPnl))/2 : q(pnl);
+  return { addr, name, pnl, weekPnl, quality, color: COLORS[i%COLORS.length], positions };
+}
+
+// ------- modèle proba -------
+function computeMyProba(m){
+  let signal = 0;
+  for(const h of m.holders){
+    const conviction = Math.min(1, Math.sqrt(h.value)/100);
+    const timing = (m.price!=null && h.avg>0)
+      ? clamp((m.price - h.avg)/0.3, -0.5, 0.5) + 1 : 1;
+    signal += h.wallet.quality * conviction * timing;
+  }
+  signal = Math.tanh(signal);
+  const myProba = clamp((m.price??0.5) + 0.12*signal, 0.01, 0.99);
+  return { myProba, edge: myProba - (m.price??0.5) };
+}
+
+function computeOverlaps(ws){
+  const map = new Map();
+  for(const w of ws){
+    for(const p of w.positions){
+      if(!p.conditionId || (p.currentValue||0) < 1) continue;
+      const key = p.conditionId + '|' + p.outcome;
+      if(!map.has(key)) map.set(key, {
+        title: p.title, outcome: p.outcome, slug: p.slug || p.eventSlug,
+        endDate: p.endDate, price: p.curPrice, holders: []
+      });
+      map.get(key).holders.push({ wallet: w, shares: p.size, avg: p.avgPrice, value: p.currentValue });
+    }
+  }
+  return [...map.values()].filter(m => m.holders.length >= 2);
+}
+
+function metrics(m, holders){
+  const totalValue = holders.reduce((s,h)=>s+h.value,0);
+  const totalShares = holders.reduce((s,h)=>s+h.shares,0);
+  const potentialGain = m.price!=null ? totalShares*(1-m.price) : 0;
+  const roi = (m.price>0 && m.price<1) ? (1-m.price)/m.price : 0;
+  const {myProba, edge} = computeMyProba({...m, holders});
+  const ev = (m.price>0.01 && m.price<0.99) ? (myProba/m.price - 1) * Math.min(1, totalValue/5000) : -1;
+  return { totalValue, totalShares, potentialGain, roi, myProba, edge, ev,
+           score: potentialGain*(m.price||0) };
+}
+
+// ------- rendu -------
+function verdictOf(m){
+  const pts = Math.round(m.edge*100);
+  if(m.price==null || m.price<=0.01 || m.price>=0.99) return {cls:'hold', label:'SUIVRE', pts};
+  if(pts >= 2) return {cls:'buy', label:`ACHETER ${/^yes$/i.test(m.outcome)?'YES':/^no$/i.test(m.outcome)?'NO':'« '+m.outcome+' »'} @ ${Math.round(m.price*100)}¢`, pts};
+  if(pts <= -2) return {cls:'avoid', label:'ÉVITER', pts};
+  return {cls:'hold', label:'SUIVRE', pts};
+}
+function whyText(m){
+  const best = [...m.holders].sort((a,b)=>(b.wallet.quality*b.value)-(a.wallet.quality*a.value))[0];
+  const goodCount = m.holders.filter(h=>h.wallet.quality>0).length;
+  const avgEntry = Math.round(m.holders.reduce((s,h)=>s+h.avg*h.value,0)/Math.max(1,m.holders.reduce((s,h)=>s+h.value,0))*100);
+  let s = `<b>${m.holders.length} wallets</b> ont posé <b>${fmtUsd(m.totalValue)}</b> dessus (entrée moyenne ${avgEntry}¢`;
+  s += m.price!=null ? `, prix actuel ${Math.round(m.price*100)}¢). ` : `). `;
+  if(goodCount===m.holders.length) s += `Tous sont rentables — dont ${best.wallet.name}.`;
+  else if(goodCount>0) s += `${goodCount}/${m.holders.length} sont rentables.`;
+  else s += `⚠️ Aucun n'est rentable actuellement.`;
+  return s;
+}
+
+function render(){
+  const dl = m => daysLeft(m.endDate);
+  let list = [];
+  for(const m of overlaps){
+    const holders = onlyProfit ? m.holders.filter(h=>h.wallet.pnl>0 || (h.wallet.weekPnl??0)>0) : m.holders;
+    if(holders.length < minWallets) continue;
+    if(query && !(m.title||'').toLowerCase().includes(query)) continue;
+    if(filterDays){ const d = dl(m); if(d===null || d<0 || d>filterDays) continue; }
+    const mt = metrics(m, holders);
+    if((sortBy==='best'||sortBy==='proba') && (m.price==null || m.price>=0.995 || mt.potentialGain<1)) continue;
+    list.push({...m, holders, ...mt});
+  }
+  list.sort((a,b) => {
+    if(sortBy==='best') return b.ev - a.ev || b.totalValue - a.totalValue;
+    if(sortBy==='gain') return b.score - a.score;
+    if(sortBy==='proba') return (b.price??0)-(a.price??0) || b.potentialGain-a.potentialGain;
+    if(sortBy==='value') return b.totalValue - a.totalValue;
+    if(sortBy==='resolves') return (dl(a)??1e9) - (dl(b)??1e9);
+    return b.holders.length - a.holders.length || b.totalValue - a.totalValue;
+  });
+
+  $('countPos').textContent = list.length;
+  $('countW').textContent = wallets.length;
+  $('sortLabel').textContent = SORT_LABELS[sortBy];
+  $('chips').innerHTML = wallets.map(w =>
+    `<span class="chip"><span class="avatar" style="background:${w.color}">${w.addr.slice(2,4).toUpperCase()}</span>${w.name}
+     <span class="wpnl ${(w.weekPnl??w.pnl)>=0?'pos':'neg'}">${w.weekPnl!=null
+       ? (w.weekPnl>=0?'+':'−')+fmtUsd(Math.abs(w.weekPnl))+'/sem'
+       : (w.pnl>=0?'+':'−')+fmtUsd(Math.abs(w.pnl))}</span></span>`).join('');
+
+  $('results').innerHTML = list.length ? list.map((m,i) => {
+    const d = dl(m);
+    const v = verdictOf(m);
+    const isTop = i===0 && sortBy==='best' && v.cls==='buy';
+    const myGain = (m.price>0 && m.price<1) ? stake*(1-m.price)/m.price : 0;
+    const probaCls = v.pts>=2?'pos':v.pts<=-2?'neg':'';
+    return `<div class="card ${isTop?'top1':''}">
+      ${isTop?'<div class="best-banner">🏆 Meilleure entrée du moment</div>':''}
+      <div class="card-head">
+        <span class="rank num">#${i+1}</span>
+        <span class="verdict ${v.cls}">${v.label}</span>
+        <span class="meta">${d!=null ? (d<=0?'résout aujourd\'hui':d===1?'résout demain':'résout dans '+d+' j') : ''}</span>
+      </div>
+      <h3>${m.title||'—'}</h3>
+      <p class="why">${whyText(m)}</p>
+      <div class="statrow">
+        <div class="stat"><div class="k">Proba estimée</div>
+          <div class="v ${probaCls}">${Math.round(m.myProba*100)}% <span class="sub">marché : ${m.price!=null?Math.round(m.price*100)+'%':'—'} (${v.pts>=0?'+':''}${v.pts})</span></div></div>
+        <div class="stat"><div class="k">Ta mise de ${fmtUsd(stake)} → si gagné</div>
+          <div class="v pos">${myGain>0?'+'+fmtUsd(myGain):'—'}</div></div>
+        <div class="stat"><div class="k">Les wallets visent</div>
+          <div class="v">${m.potentialGain>0?'+'+fmtUsd(m.potentialGain):'—'}</div></div>
+      </div>
+      <div class="card-foot">
+        ${m.slug?`<a class="pm" target="_blank" href="https://polymarket.com/event/${m.slug}">Trader sur Polymarket →</a>`:''}
+        <details>
+          <summary>détail des ${m.holders.length} wallets</summary>
+          ${[...m.holders].sort((a,b)=>b.value-a.value).map(h=>`
+            <div class="brow">
+              <span class="avatar" style="background:${h.wallet.color}">${h.wallet.addr.slice(2,4).toUpperCase()}</span>
+              <span class="wname">${h.wallet.name}</span>
+              <span class="pnl ${h.wallet.pnl<0?'neg':'pos'}">${h.wallet.pnl>=0?'+':'−'}${fmtUsd(Math.abs(h.wallet.pnl))}</span>
+              <span class="shares">${Math.round(h.shares).toLocaleString()} parts · entré à ${Math.round(h.avg*100)}¢</span>
+              <span class="val">${fmtUsd(h.value)}</span>
+            </div>`).join('')}
+        </details>
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty">Aucune opportunité pour ces filtres.</div>';
+}
+
+// ------- actions -------
+async function analyze(){
+  const raw = $('input').value.split(/[\s,;\n]+/).filter(Boolean);
+  const addrs = [...new Set(raw.filter(a=>/^0x[0-9a-fA-F]{40}$/.test(a)))];
+  $('error').style.display='none';
+  if(addrs.length < 2){
+    $('error').textContent = 'Il faut au moins 2 adresses 0x valides.';
+    $('error').style.display='block'; return;
+  }
+  localStorage.setItem('pmo_input', $('input').value);
+  $('results').innerHTML = '<div class="spinner">Chargement des positions live…</div>';
+  $('controls').style.display='flex';
+  $('summary').style.display='flex';
+  $('chips').style.display='flex';
+  $('modelnote').style.display='block';
+  $('livepill').style.display='inline-flex';
+  try{
+    wallets = await Promise.all(addrs.map((a,i)=>loadWallet(a,i)));
+    overlaps = computeOverlaps(wallets);
+    render();
+    $('note').textContent = 'MAJ '+new Date().toLocaleTimeString();
+  }catch(e){
+    $('error').textContent = 'Erreur API : '+e.message;
+    $('error').style.display='block';
+    $('results').innerHTML='';
+  }
+}
+
+$('analyze').onclick = analyze;
+$('refreshBtn').onclick = analyze;
+$('presetBtn').onclick = async () => {
+  $('note').textContent = 'Chargement du leaderboard…';
+  try{
+    const lb = await fetchJson(`${API}/v1/leaderboard?limit=10&window=week`);
+    lb.forEach(u => {
+      if(u.userName) nameCache.set(u.proxyWallet.toLowerCase(), u.userName);
+      if(u.pnl!=null) weekPnlCache.set(u.proxyWallet.toLowerCase(), u.pnl);
+    });
+    $('input').value = lb.map(u=>u.proxyWallet).join('\n');
+    analyze();
+  }catch(e){
+    $('error').textContent = 'Impossible de charger le leaderboard : '+e.message;
+    $('error').style.display='block';
+  }
+};
+
+$('sortSel').onchange = e => { sortBy = e.target.value; render(); };
+$('daysSel').onchange = e => { filterDays = +e.target.value; render(); };
+$('minSel').onchange = e => { minWallets = +e.target.value; render(); };
+$('onlyProfit').onchange = e => { onlyProfit = e.target.checked; render(); };
+$('query').oninput = e => { query = e.target.value.trim().toLowerCase(); render(); };
+$('stake').oninput = e => { stake = Math.max(1, +e.target.value||100); render(); };
+$('autoRefresh').onchange = e => {
+  clearInterval(autoTimer);
+  if(e.target.checked) autoTimer = setInterval(()=>{ if(wallets.length) analyze(); }, 60000);
+};
+
+const saved = localStorage.getItem('pmo_input');
+if(saved) $('input').value = saved;
+if(location.hash.includes('preset')) $('presetBtn').click();
+else if(saved) analyze();
+</script>
+</body>
+</html>
