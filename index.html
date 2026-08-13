@@ -86,6 +86,15 @@
   .tag{font-size:11px;font-weight:700;padding:4px 9px;border-radius:6px}
   .tag.fresh{background:rgba(249,115,22,.14);color:#f97316}
   .tag.twin{background:rgba(139,147,161,.12);color:var(--muted)}
+  .tag.new{background:rgba(59,130,246,.16);color:#60a5fa}
+  .tag.contested{background:rgba(239,68,68,.14);color:var(--red)}
+  .warn.contested{background:var(--red-bg);border-color:rgba(239,68,68,.3);color:#fca5a5}
+  .whatsnew{display:none;background:rgba(59,130,246,.10);border:1px solid rgba(59,130,246,.3);color:#93c5fd;
+    border-radius:12px;padding:12px 16px;margin-bottom:14px;font-size:13.5px;line-height:1.65}
+  .whatsnew summary{color:#93c5fd;margin-top:6px}
+  .whatsnew .exit{color:var(--muted);font-size:12.5px;padding:4px 0 4px 14px}
+  .chartbox .chart{margin-top:8px;min-height:20px;color:var(--dim);font-size:12px}
+  .chartlegend{color:var(--dim);font-size:11.5px;margin-top:4px}
   .meta{margin-left:auto;color:var(--dim);font-size:12px}
 
   .card h3{font-size:16px;font-weight:650;margin-bottom:4px}
@@ -242,6 +251,7 @@
   <div class="chips" id="chips"></div>
   <p class="modelnote" id="modelnote">La <b>proba estimée</b> part du prix du marché et l'ajuste (±12 pts max) selon le <b>palmarès réel</b> des wallets positionnés — trades clos gagnants/perdants reconstruits depuis leur historique — leur conviction (part de leur portefeuille engagée) et leur prix d'entrée. <span class="pos">ACHETER</span> = le smart money voit plus haut que le marché · <span class="neg">ÉVITER</span> = les wallets dessus perdent ou sont mal entrés. Heuristique — pas un conseil financier.</p>
 
+  <div class="whatsnew" id="whatsnew"></div>
   <div id="results"></div>
   </div>
 </main>
@@ -442,27 +452,47 @@ function detectTwins(ws){
 }
 
 // ---------- modèle ----------
-function computeMyProba(m){
+// Force du signal d'un camp : qualité du wallet × conviction × timing, dédoublonnée
+// par groupe (un même trader sur plusieurs wallets ne compte pas plusieurs fois).
+function sideSignal(holders, price){
   const perGroup = new Map();
-  for(const h of m.holders){
+  for(const h of holders){
     const g = h.wallet.group ?? h.wallet.addr;
     perGroup.set(g, (perGroup.get(g)||0)+1);
   }
-  let signal = 0;
-  for(const h of m.holders){
+  let s = 0;
+  for(const h of holders){
     const g = h.wallet.group ?? h.wallet.addr;
     // conviction = part du portefeuille engagée (10 % = conviction maximale).
     // En dollars bruts, un gros wallet paraissait convaincu pour une miette.
     const conviction = h.wallet.portfolio > 0
       ? Math.min(1, (h.value / h.wallet.portfolio) / 0.10)
       : Math.min(1, Math.sqrt(h.value)/100);
-    const timing = (m.price!=null && h.avg>0)
-      ? clamp((m.price - h.avg)/0.3, -0.5, 0.5) + 1 : 1;
-    signal += h.wallet.quality * conviction * timing / perGroup.get(g);
+    const timing = (price!=null && h.avg>0)
+      ? clamp((price - h.avg)/0.3, -0.5, 0.5) + 1 : 1;
+    s += h.wallet.quality * conviction * timing / perGroup.get(g);
   }
-  signal = Math.tanh(signal);
-  const myProba = clamp((m.price??0.5) + 0.12*signal, 0.01, 0.99);
-  return { myProba, edge: myProba - (m.price??0.5), hasTwins: [...perGroup.values()].some(n=>n>1) };
+  return { s, hasTwins: [...perGroup.values()].some(n=>n>1) };
+}
+
+function computeMyProba(m){
+  const pro = sideSignal(m.holders, m.price);
+  // Le désaccord DÉTRUIT de l'information, il ne l'inverse pas. Soustraire le signal
+  // adverse était faux : quand les opposants sont eux-mêmes mauvais (signal négatif),
+  // la soustraction gonflait la note. On ramène donc le signal vers zéro à mesure que
+  // l'argent suivi se répartit des deux côtés — 100 % d'accord → intact, 50/50 → nul.
+  const myVal  = m.holders.reduce((s,h)=>s+h.value,0);
+  const oppVal = (m.others||[]).reduce((s,o)=>s+o.value,0);
+  const agreement = (myVal+oppVal) > 0 ? myVal/(myVal+oppVal) : 1;
+  const confidence = Math.max(0, 2*agreement - 1);
+  const signal = Math.tanh(pro.s) * confidence;
+  const p = m.price ?? 0.5;
+  // L'ajustement est plafonné par l'incertitude du marché : 12 pts à 50¢, mais
+  // seulement ~3 pts à 7¢. Sans ça, +12 pts sur un marché à 7¢ = +170 % de
+  // rendement théorique, et le classement se remplissait de tickets de loterie.
+  const room = 4*p*(1-p);
+  const myProba = clamp(p + 0.12*signal*room, 0.01, 0.99);
+  return { myProba, edge: myProba - (m.price??0.5), hasTwins: pro.hasTwins };
 }
 
 function computeOverlaps(ws){
@@ -472,7 +502,7 @@ function computeOverlaps(ws){
       if(!p.conditionId || (p.currentValue||0) < 1) continue;
       const key = p.conditionId + '|' + p.outcome;
       if(!map.has(key)) map.set(key, {
-        conditionId: p.conditionId, title: p.title, outcome: p.outcome,
+        conditionId: p.conditionId, title: p.title, outcome: p.outcome, asset: p.asset,
         slug: p.slug, eventSlug: p.eventSlug, endDate: p.endDate, price: p.curPrice, holders: []
       });
       map.get(key).holders.push({
@@ -480,6 +510,18 @@ function computeOverlaps(ws){
         lastBuy: w.lastBuy.get(key) || 0
       });
     }
+  }
+  // Rattacher à chaque marché les camps adverses tenus par les traders suivis.
+  const byCid = new Map();
+  for(const m of map.values()){
+    if(!byCid.has(m.conditionId)) byCid.set(m.conditionId, []);
+    byCid.get(m.conditionId).push(m);
+  }
+  for(const m of map.values()){
+    m.others = byCid.get(m.conditionId)
+      .filter(o => o.outcome !== m.outcome)
+      .map(o => ({ outcome:o.outcome, price:o.price, holders:o.holders,
+                   n:o.holders.length, value:o.holders.reduce((s,h)=>s+h.value,0) }));
   }
   return [...map.values()].filter(m => m.holders.length >= 2);
 }
@@ -603,6 +645,50 @@ function whyText(m){
   return s;
 }
 
+// ---------- quoi de neuf depuis la dernière visite ----------
+// Ce qui compte pour qui revient, ce n'est pas la liste : c'est ce qui a CHANGÉ.
+const SNAP_KEY = 'pmo_snap_';
+let newKeys = new Set(), exits = [], snapAge = null;
+const mkey = m => m.conditionId + '|' + m.outcome;
+const contested = m => (m.others||[]).some(o => o.value >= Math.max(100, 0.10*(m.totalValue||0)));
+const isNew = m => newKeys.has(mkey(m));
+function hashStr(s){ let h=0; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))|0; return (h>>>0).toString(36); }
+
+function diffSnapshot(addrs, list){
+  const id = hashStr(addrs.map(a=>a.toLowerCase()).sort().join(','));
+  let snap = null;
+  try{ snap = JSON.parse(localStorage.getItem(SNAP_KEY+id)||'null'); }catch(e){}
+  const now = Math.floor(Date.now()/1000);
+  const cur = {};
+  for(const m of list)
+    cur[mkey(m)] = {t:m.title, o:m.outcome, v:Math.round(m.holders.reduce((s,h)=>s+h.value,0))};
+  newKeys = new Set(); exits = []; snapAge = null;
+  if(snap && snap.items){
+    snapAge = snap.ts;
+    for(const k in cur) if(!(k in snap.items)) newKeys.add(k);
+    for(const k in snap.items) if(!(k in cur)) exits.push(snap.items[k]);
+    exits.sort((a,b)=>b.v-a.v);
+  }
+  // La référence n'est renouvelée que si elle date de plus de 15 min : sinon
+  // l'auto-refresh effacerait les badges « nouveau » en pleine session.
+  if(!snap || (now - (snap.ts||0)) > 900){
+    try{ localStorage.setItem(SNAP_KEY+id, JSON.stringify({ts:now, items:cur})); }catch(e){}
+  }
+}
+
+function renderWhatsNew(){
+  const el = $('whatsnew');
+  if(snapAge == null || (!newKeys.size && !exits.length)){ el.style.display='none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = `🔔 <b>Depuis ta dernière visite</b> (${esc(fmtAgo(snapAge)||'à l\'instant')}) :
+    <b>${newKeys.size}</b> nouvelle${newKeys.size>1?'s':''} position${newKeys.size>1?'s':''} du smart money
+    · <b>${exits.length}</b> sortie${exits.length>1?'s':''}.
+    ${exits.length?`<details><summary>voir les sorties</summary>
+      ${exits.slice(0,15).map(x=>`<div class="exit">🚪 ${esc(x.t||'—')} — « ${esc(x.o||'')} » <span class="num">(valait ${fmtUsd(x.v||0)})</span></div>`).join('')}
+      <div class="exit" style="color:var(--dim)">Une sortie = plus aucun trader suivi n'est positionné : soit ils ont vendu, soit le marché s'est résolu.</div>
+    </details>`:''}`;
+}
+
 function render(){
   const dl = m => daysLeft(m.endDate);
   const nowS = Date.now()/1000;
@@ -629,6 +715,7 @@ function render(){
   $('countPos').textContent = list.length;
   $('countW').textContent = wallets.length;
   $('sortLabel').textContent = SORT_LABELS[sortBy];
+  renderWhatsNew();
 
   const chipHtml = wallets.map(w => {
     const r = w.tr && w.tr.trades>=3
@@ -654,7 +741,9 @@ function render(){
       <div class="card-head">
         <span class="rank num">#${i+1}</span>
         <span class="verdict ${v.cls}">${v.label}</span>
+        ${isNew(m)?'<span class="tag new">🆕 nouveau</span>':''}
         ${fresh?`<span class="tag fresh">🔥 acheté ${esc(fmtAgo(m.freshest))}</span>`:''}
+        ${contested(m)?'<span class="tag contested">⚔️ contesté</span>':''}
         ${m.hasTwins?'<span class="tag twin">⚠️ wallets liés</span>':''}
         <span class="meta">${d!=null ? (d<=0?'résout aujourd\'hui':d===1?'résout demain':'résout dans '+d+' j') : ''}</span>
       </div>
@@ -662,6 +751,9 @@ function render(){
       <p class="why">${whyText(m)}</p>
       ${late?`<div class="warn">⚠️ <b>Tu arrives après eux.</b> Ils sont entrés à ${Math.round(m.avgEntry*100)}¢, le marché est à ${Math.round(m.price*100)}¢ :
         une partie de leur avantage est déjà encaissée, et ton gain potentiel est plus faible que le leur.</div>`:''}
+      ${contested(m)?`<div class="warn contested">⚔️ <b>Le smart money n'est pas d'accord.</b>
+        ${m.others.filter(o=>o.n>0).map(o=>`${o.n} trader${o.n>1?'s':''} pari${o.n>1?'ent':'e'} sur « ${esc(o.outcome)} » (${fmtUsd(o.value)})`).join(', ')} —
+        l'inverse de cette carte. La proba estimée en tient déjà compte, mais considère ce signal comme faible.</div>`:''}
       <div class="statrow">
         <div class="stat"><div class="k">Proba estimée</div>
           <div class="v ${probaCls}">${Math.round(m.myProba*100)}% <span class="sub">marché : ${m.price!=null?Math.round(m.price*100)+'%':'—'} (${v.pts>=0?'+':''}${v.pts})</span></div></div>
@@ -672,6 +764,10 @@ function render(){
       </div>
       <div class="card-foot">
         ${pmUrl(m)?`<a class="pm" target="_blank" rel="noopener noreferrer" href="${esc(pmUrl(m))}">Trader sur Polymarket →</a>`:''}
+        ${m.asset?`<details class="chartbox" data-asset="${esc(m.asset)}" data-avg="${m.avgEntry||0}">
+          <summary>📈 courbe du prix &amp; leur point d'entrée</summary>
+          <div class="chart">clique pour charger…</div>
+        </details>`:''}
         <details>
           <summary>détail des ${m.holders.length} wallets</summary>
           ${[...m.holders].sort((a,b)=>b.value-a.value).map(h=>{
@@ -872,6 +968,7 @@ async function analyze(){
     wallets = loaded;
     detectTwins(wallets);
     overlaps = computeOverlaps(wallets);
+    diffSnapshot(todo, overlaps);
     render();
     $('note').textContent = 'MAJ '+new Date().toLocaleTimeString();
     scorePredictions();   // en tâche de fond : confronte les anciens verdicts aux résultats
@@ -908,6 +1005,43 @@ $('presetAll').onclick  = () => loadPreset('all');
 
 $('sortSel').onchange   = e => { sortBy = e.target.value; render(); };
 $('daysSel').onchange   = e => { filterDays = +e.target.value; render(); };
+// ---------- courbe de prix (chargée seulement à l'ouverture) ----------
+// Une requête par marché : hors de question de les tirer pour 400 cartes d'un coup.
+function sparkline(pts, avg){
+  if(!pts || pts.length < 2) return 'Pas assez d\'historique pour ce marché.';
+  const W=560, H=90, P=8;
+  const vals = pts.map(p=>p.p);
+  const lo = Math.min(...vals, avg||1), hi = Math.max(...vals, avg||0);
+  const rng = (hi-lo) || 0.02;
+  const x = i => P + i*(W-2*P)/(pts.length-1);
+  const y = v => P + (1-(v-lo)/rng)*(H-2*P);
+  const d = pts.map((p,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(p.p).toFixed(1)}`).join(' ');
+  const last = vals[vals.length-1];
+  const aY = avg>0 ? y(avg) : null;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="90" preserveAspectRatio="none">
+      ${aY!=null?`<line x1="${P}" x2="${W-P}" y1="${aY.toFixed(1)}" y2="${aY.toFixed(1)}"
+        stroke="#eab308" stroke-width="1.5" stroke-dasharray="5 4"/>`:''}
+      <path d="${d}" fill="none" stroke="#22c55e" stroke-width="2"/>
+    </svg>
+    <div class="chartlegend">— prix du marché (${Math.round(last*100)}¢ maintenant)
+      ${avg>0?`· <span style="color:#eab308">- -</span> leur entrée moyenne (${Math.round(avg*100)}¢)`:''} · 7 derniers jours</div>`;
+}
+
+document.addEventListener('toggle', async e => {
+  const d = e.target;
+  if(!d.classList || !d.classList.contains('chartbox') || !d.open || d.dataset.loaded) return;
+  const box = d.querySelector('.chart');
+  d.dataset.loaded = '1';
+  box.textContent = 'chargement de la courbe…';
+  try{
+    const j = await fetchJson(`https://clob.polymarket.com/prices-history?market=${encodeURIComponent(d.dataset.asset)}&interval=1w&fidelity=60`);
+    box.innerHTML = sparkline(j.history, +d.dataset.avg || 0);
+  }catch(err){
+    box.textContent = 'Courbe indisponible pour ce marché.';
+    d.dataset.loaded = '';
+  }
+}, true);
+
 $('freshSel').onchange  = e => { freshDays = +e.target.value; render(); };
 $('minSel').onchange    = e => { minWallets = +e.target.value; render(); };
 $('onlyProfit').onchange= e => { onlyProfit = e.target.checked; render(); };
