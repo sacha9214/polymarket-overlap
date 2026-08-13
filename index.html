@@ -113,7 +113,8 @@
 
   .empty{color:var(--muted);text-align:center;padding:60px 0;font-size:14px}
   .spinner{color:var(--green);text-align:center;padding:60px 0;font-size:14px;animation:pulse 1.2s infinite}
-  .error{color:var(--red);padding:14px;background:var(--red-bg);border:1px solid rgba(239,68,68,.3);border-radius:10px;margin-bottom:16px;font-size:13px;display:none}
+  .error{color:var(--red);padding:14px;background:var(--red-bg);border:1px solid rgba(239,68,68,.3);border-radius:10px;margin-bottom:16px;font-size:13px;line-height:1.6;display:none}
+  .relaynote{color:var(--gold);padding:12px 14px;background:var(--gold-bg);border:1px solid rgba(234,179,8,.3);border-radius:10px;margin-bottom:16px;font-size:13px;line-height:1.6;display:none}
   .modelnote{display:none;color:var(--dim);font-size:12px;margin:0 2px 18px;line-height:1.6}
   footer{text-align:center;color:var(--dim);font-size:12px;padding:30px;line-height:1.7}
 </style>
@@ -140,6 +141,7 @@
   </div>
 
   <div class="error" id="error"></div>
+  <div class="relaynote" id="relayNote"></div>
 
   <div class="controls" id="controls">
     <div class="ctl">Classement
@@ -205,17 +207,66 @@ function fmtUsd(v){
   return '$'+v.toFixed(0);
 }
 const daysLeft = end => end ? Math.ceil((new Date(end)-Date.now())/864e5) : null;
-async function fetchJson(url){
-  const r = await fetch(url);
+// Certains réseaux (bloqueur de pub, pare-feu d'entreprise/école, VPN, restriction
+// géo) empêchent le navigateur de joindre polymarket.com → "Failed to fetch".
+// Dans ce cas on bascule automatiquement sur un relais public, limité à 20 req/min.
+let relayMode = false;
+const RELAY_MAX_WALLETS = 10;   // le relais plafonne à ~20 requêtes/min
+const RELAY_GAP_MS = 3500;      // espacement entre deux requêtes relayées
+
+async function rawFetch(url, viaRelay){
+  const r = viaRelay
+    ? await fetch('https://r.jina.ai/'+url, {headers:{'x-respond-with':'text'}})
+    : await fetch(url);
   if(!r.ok) throw new Error(r.status+' sur '+url);
-  return r.json();
+  return r.json(); // parse le JSON quel que soit le content-type renvoyé
+}
+
+// Sérialise les appels relayés et les espace, sinon le relais renvoie 429.
+let relayChain = Promise.resolve();
+function relayThrottle(task){
+  const run = relayChain.then(task, task);
+  relayChain = run.then(
+    () => new Promise(r => setTimeout(r, RELAY_GAP_MS)),
+    () => new Promise(r => setTimeout(r, RELAY_GAP_MS))
+  );
+  return run;
+}
+
+const RELAY_MSG = '🛡️ Ce réseau bloque l\'accès direct à Polymarket — passage automatique par un relais.';
+function netErrMsg(e){
+  if(/^429 /.test(e.message))
+    return relayMode
+      ? `<b>Relais saturé.</b> Ce réseau bloque l'accès direct à Polymarket, et le relais de secours limite le nombre de requêtes.<br>
+         Attends une minute puis relance, ou mieux : désactive ton bloqueur de pub sur ce site / change de réseau pour retrouver l'accès direct (bien plus rapide).`
+      : `<b>Trop de requêtes.</b> L'API Polymarket t'a temporairement limité — attends une minute puis relance.`;
+  if(e instanceof TypeError || /Failed to fetch|NetworkError/i.test(e.message))
+    return `<b>Impossible de joindre l'API Polymarket depuis ce PC</b>, même via le relais.<br>
+      Cause probable : un bloqueur de pub (uBlock, AdGuard…), le pare-feu du réseau (école, entreprise, wifi public) ou un VPN.<br>
+      À essayer : désactiver le bloqueur sur ce site, ou passer sur un autre réseau (partage de connexion du téléphone).`;
+  return 'Erreur API : '+e.message;
+}
+
+async function fetchJson(url){
+  if(!relayMode){
+    try{ return await rawFetch(url, false); }
+    catch(e){
+      // TypeError = panne réseau / CORS / domaine bloqué. Un vrai 404 doit remonter tel quel.
+      if(!(e instanceof TypeError)) throw e;
+      relayMode = true;
+      $('relayNote').innerHTML = RELAY_MSG;
+      $('relayNote').style.display = 'block';
+    }
+  }
+  return relayThrottle(() => rawFetch(url, true));
 }
 
 // ------- chargement -------
 async function loadWallet(addr, i){
   const positions = await fetchJson(`${API}/positions?user=${addr}&limit=500&sizeThreshold=1`);
   let name = nameCache.get(addr.toLowerCase()) || short(addr);
-  if (!nameCache.has(addr.toLowerCase())) {
+  // en mode relais, on économise les requêtes : pas de recherche de pseudo
+  if (!nameCache.has(addr.toLowerCase()) && !relayMode) {
     const prof = await fetchJson(`${GAMMA}/public-profile?address=${addr}`).catch(()=>null);
     if (prof) {
       if (prof.name && !/^0x[0-9a-fA-F]{40}/.test(prof.name)) name = prof.name;
@@ -384,7 +435,11 @@ function render(){
 }
 
 // ------- actions -------
+// Jeton de session : si un nouveau chargement démarre (clic, refresh, auto-refresh),
+// l'ancien est abandonné au lieu d'écraser les résultats du nouveau.
+let runId = 0;
 async function analyze(){
+  const myRun = ++runId;
   const raw = $('input').value.split(/[\s,;\n]+/).filter(Boolean);
   const addrs = [...new Set(raw.filter(a=>/^0x[0-9a-fA-F]{40}$/.test(a)))];
   $('error').style.display='none';
@@ -400,18 +455,28 @@ async function analyze(){
   $('modelnote').style.display='block';
   $('livepill').style.display='inline-flex';
   try{
-    // chargement par lots de 10 pour ménager l'API (jusqu'à 50 wallets)
-    wallets = [];
-    for(let i=0; i<addrs.length; i+=10){
-      const chunk = addrs.slice(i, i+10);
-      wallets.push(...await Promise.all(chunk.map((a,j)=>loadWallet(a, i+j))));
-      $('results').innerHTML = `<div class="spinner">Chargement… ${wallets.length}/${addrs.length} wallets</div>`;
+    // chargement par lots pour ménager l'API (jusqu'à 50 wallets)
+    let todo = addrs;
+    const loaded = [];
+    for(let i=0; i<todo.length; i += (relayMode?3:10)){
+      const chunk = todo.slice(i, i + (relayMode?3:10));
+      loaded.push(...await Promise.all(chunk.map((a,j)=>loadWallet(a, i+j))));
+      if(myRun !== runId) return; // un chargement plus récent a pris la main
+      // le relais plafonne à 20 requêtes/min : on réduit la liste s'il s'est activé
+      if(relayMode && todo.length > RELAY_MAX_WALLETS){
+        todo = todo.slice(0, RELAY_MAX_WALLETS);
+        $('relayNote').innerHTML = RELAY_MSG + ` Analyse limitée aux <b>${RELAY_MAX_WALLETS} premiers wallets</b> pour rester sous sa limite de débit.`;
+        $('relayNote').style.display = 'block';
+      }
+      $('results').innerHTML = `<div class="spinner">Chargement… ${loaded.length}/${todo.length} wallets${relayMode?' (via relais, plus lent)':''}</div>`;
     }
+    wallets = loaded;
     overlaps = computeOverlaps(wallets);
     render();
     $('note').textContent = 'MAJ '+new Date().toLocaleTimeString();
   }catch(e){
-    $('error').textContent = 'Erreur API : '+e.message;
+    if(myRun !== runId) return;
+    $('error').innerHTML = netErrMsg(e);
     $('error').style.display='block';
     $('results').innerHTML='';
   }
@@ -432,7 +497,7 @@ async function loadPreset(win){
     $('input').value = lb.map(u=>u.proxyWallet).join('\n');
     analyze();
   }catch(e){
-    $('error').textContent = 'Impossible de charger le leaderboard : '+e.message;
+    $('error').innerHTML = netErrMsg(e);
     $('error').style.display='block';
   }
 }
