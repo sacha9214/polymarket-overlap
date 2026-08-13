@@ -99,6 +99,11 @@
   .campline:first-child{margin-top:4px}
   .campline .num{color:var(--text);font-family:var(--mono);font-weight:700}
   .brow.opp{opacity:.85;border-left:2px solid rgba(239,68,68,.45);padding-left:10px}
+  .sibs{margin-top:14px;padding:10px 12px;background:var(--panel2);border-radius:10px;font-size:12.5px;color:var(--muted)}
+  .sibs b{color:var(--text)}
+  .sib{display:inline-block;background:var(--bg);border:1px solid var(--border);border-radius:7px;
+       padding:3px 9px;margin:5px 5px 0 0;font-family:var(--mono);font-size:11.5px;color:#cfd4dc}
+  .sibnote{color:var(--dim);font-size:11.5px;margin-top:7px;line-height:1.5}
   .chartbox .chart{margin-top:8px;min-height:20px;color:var(--dim);font-size:12px}
   .chartlegend{color:var(--dim);font-size:11.5px;margin-top:4px}
   .meta{margin-left:auto;color:var(--dim);font-size:12px}
@@ -621,7 +626,7 @@ function pmUrl(m){
 
 function verdictOf(m){
   const pts = Math.round(m.edge*100);
-  const side = /^yes$/i.test(m.outcome) ? 'YES' : /^no$/i.test(m.outcome) ? 'NO' : '« '+esc(m.outcome)+' »';
+  const side = /^yes$/i.test(m.outcome) ? 'YES' : /^no$/i.test(m.outcome) ? 'NO' : '« '+esc(outcomeLabel(m.title, m.outcome))+' »';
   if(m.price==null || m.price<=0.01 || m.price>=0.99) return {cls:'hold', label:'SUIVRE', pts};
   if(pts >= 2) return {cls:'buy', label:`ACHETER ${side} @ ${Math.round(m.price*100)}¢`, pts};
   if(pts <= -2) return {cls:'avoid', label:'ÉVITER', pts};
@@ -690,9 +695,27 @@ function renderWhatsNew(){
     <b>${newKeys.size}</b> nouvelle${newKeys.size>1?'s':''} position${newKeys.size>1?'s':''} du smart money
     · <b>${exits.length}</b> sortie${exits.length>1?'s':''}.
     ${exits.length?`<details><summary>voir les sorties</summary>
-      ${exits.slice(0,15).map(x=>`<div class="exit">🚪 ${esc(x.t||'—')} — « ${esc(x.o||'')} » <span class="num">(valait ${fmtUsd(x.v||0)})</span></div>`).join('')}
+      ${exits.slice(0,15).map(x=>`<div class="exit">🚪 ${esc(x.t||'—')} — « ${esc(outcomeLabel(x.t, x.o))} » <span class="num">(valait ${fmtUsd(x.v||0)})</span></div>`).join('')}
       <div class="exit" style="color:var(--dim)">Une sortie = plus aucun trader suivi n'est positionné : soit ils ont vendu, soit le marché s'est résolu.</div>
     </details>`:''}`;
+}
+
+// « Over » seul ne dit rien : c'est « Over 8.5 » qui est le pari. La ligne vit dans le
+// titre du marché, et un même match en propose plusieurs (O/U 7.5, 8.5, 9.5…).
+function outcomeLabel(title, outcome){
+  const o = (outcome||'').trim();
+  const line = ((title||'').match(/O\/U\s*([\d.]+)/i) || [])[1];
+  return (line && /^(over|under)$/i.test(o)) ? `${o} ${line}` : o;
+}
+
+// Les autres lignes du même match sur lesquelles les traders suivis sont aussi engagés.
+function siblingLines(m){
+  if(!m.eventSlug) return [];
+  return overlaps
+    .filter(o => o.eventSlug === m.eventSlug && o.conditionId !== m.conditionId)
+    .map(o => ({ label: outcomeLabel(o.title, o.outcome), n: o.holders.length,
+                 value: o.holders.reduce((s,h)=>s+h.value,0) }))
+    .sort((a,b)=>b.value-a.value);
 }
 
 // « Over »/« Under » ne sont pas des équipes : ce sont des paris sur le TOTAL de points
@@ -717,7 +740,7 @@ function explainOutcome(title, outcome){
 }
 
 // Une ligne de wallet, réutilisée pour le camp suivi ET le camp adverse.
-function holderRow(h, outcome, opposite){
+function holderRow(h, outcome, opposite, title){
   const invested = h.shares * h.avg;
   const perf = invested>0 ? (h.value-invested)/invested : 0;
   const pct = h.wallet.portfolio>0 ? h.value/h.wallet.portfolio*100 : 0;
@@ -728,7 +751,7 @@ function holderRow(h, outcome, opposite){
       <div class="brow-top">
         <span class="avatar" style="background:${h.wallet.color}">${esc(h.wallet.addr.slice(2,4).toUpperCase())}</span>
         <span class="wname">${esc(h.wallet.name)}</span>
-        <span class="opt ${/^yes$/i.test(outcome)?'yes':/^no$/i.test(outcome)?'no':'other'}">a choisi ${esc(outcome)}</span>
+        <span class="opt ${/^yes$/i.test(outcome)?'yes':/^no$/i.test(outcome)?'no':'other'}">a choisi ${esc(outcomeLabel(title, outcome))}</span>
       </div>
       <div class="brow-sub">
         💵 A misé <span class="num">${fmtUsd(invested)}</span> à ${Math.round(h.avg*100)}¢
@@ -794,6 +817,7 @@ function render(){
     const oppSides = (m.others||[]).filter(o=>o.n>0);
     const oppTotal = oppSides.reduce((s,o)=>s+o.value,0);
     const oppN     = oppSides.reduce((s,o)=>s+o.n,0);
+    const sibs     = siblingLines(m);
     return `<div class="card ${isTop?'top1':''}">
       ${isTop?'<div class="best-banner">🏆 Meilleure entrée du moment</div>':''}
       <div class="card-head">
@@ -806,13 +830,13 @@ function render(){
         <span class="meta">${d!=null ? (d<=0?'résout aujourd\'hui':d===1?'résout demain':'résout dans '+d+' j') : ''}</span>
       </div>
       <h3>${esc(m.title||'—')}</h3>
-      <p class="bet">Le pari : <span class="opt ${/^yes$/i.test(m.outcome)?'yes':/^no$/i.test(m.outcome)?'no':'other'}">${esc(m.outcome)}</span>
+      <p class="bet">Le pari : <span class="opt ${/^yes$/i.test(m.outcome)?'yes':/^no$/i.test(m.outcome)?'no':'other'}">${esc(outcomeLabel(m.title, m.outcome))}</span>
         = ${explainOutcome(m.title, m.outcome)}.</p>
       <p class="why">${whyText(m)}</p>
       ${late?`<div class="warn">⚠️ <b>Tu arrives après eux.</b> Ils sont entrés à ${Math.round(m.avgEntry*100)}¢, le marché est à ${Math.round(m.price*100)}¢ :
         une partie de leur avantage est déjà encaissée, et ton gain potentiel est plus faible que le leur.</div>`:''}
       ${contested(m)?`<div class="warn contested">⚔️ <b>Le smart money n'est pas d'accord.</b>
-        ${oppSides.map(o=>`${o.n} trader${o.n>1?'s':''} pari${o.n>1?'ent':'e'} <b>${fmtUsd(o.value)}</b> sur « ${esc(o.outcome)} »`).join(', ')} —
+        ${oppSides.map(o=>`${o.n} trader${o.n>1?'s':''} pari${o.n>1?'ent':'e'} <b>${fmtUsd(o.value)}</b> sur « ${esc(outcomeLabel(m.title, o.outcome))} »`).join(', ')} —
         contre <b>${fmtUsd(m.totalValue)}</b> de ce côté, soit <b>${Math.round(oppTotal/(m.totalValue+oppTotal)*100)}%</b> de l'argent suivi à contre-courant.
         La proba estimée en tient déjà compte ; le détail ci-dessous nomme chaque trader des deux camps.</div>`:''}
       <div class="statrow">
@@ -832,17 +856,21 @@ function render(){
         <details>
           <summary>détail des ${m.holders.length} wallets${oppTotal>0?` <span style="color:var(--red)">+ ${oppN} en face</span>`:''}</summary>
           <div class="campline">
-            <b class="pos">✅ Pour « ${esc(m.outcome)} »</b> — ${m.holders.length} trader${m.holders.length>1?'s':''},
+            <b class="pos">✅ Pour « ${esc(outcomeLabel(m.title, m.outcome))} »</b> — ${m.holders.length} trader${m.holders.length>1?'s':''},
             <span class="num">${fmtUsd(m.totalValue)}</span> engagés
           </div>
-          ${[...m.holders].sort((a,b)=>b.value-a.value).map(h=>holderRow(h, m.outcome, false)).join('')}
+          ${[...m.holders].sort((a,b)=>b.value-a.value).map(h=>holderRow(h, m.outcome, false, m.title)).join('')}
           ${(m.others||[]).filter(o=>o.n>0).sort((a,b)=>b.value-a.value).map(o=>`
             <div class="campline opp">
-              <b class="neg">⚔️ Contre — pour « ${esc(o.outcome)} »</b> — ${o.n} trader${o.n>1?'s':''},
+              <b class="neg">⚔️ Contre — pour « ${esc(outcomeLabel(m.title, o.outcome))} »</b> — ${o.n} trader${o.n>1?'s':''},
               <span class="num">${fmtUsd(o.value)}</span> engagés
               <span style="color:var(--dim)">· ${Math.round(o.value/(m.totalValue+oppTotal)*100)}% de l'argent suivi sur ce marché</span>
             </div>
-            ${[...o.holders].sort((a,b)=>b.value-a.value).map(h=>holderRow(h, o.outcome, true)).join('')}`).join('')}
+            ${[...o.holders].sort((a,b)=>b.value-a.value).map(h=>holderRow(h, o.outcome, true, m.title)).join('')}`).join('')}
+          ${sibs.length?`<div class="sibs">🎚️ <b>Leurs autres paris sur ce match</b> (${sibs.length}) :
+            ${sibs.map(s=>`<span class="sib">${esc(s.label)} — ${s.n} trader${s.n>1?'s':''}, ${fmtUsd(s.value)}</span>`).join(' ')}
+            ${sibs.some(s=>/^(over|under)\s/i.test(s.label))?`<div class="sibnote">Plusieurs lignes O/U sur le même match : dans le même sens ils étalent leur mise, dans les deux sens ils parient sur une fourchette de score.</div>`:''}
+          </div>`:''}
         </details>
       </div>
     </div>`;
@@ -912,7 +940,7 @@ function renderMe(w){
     return `<div class="prow">
       <div class="prow-top">
         <span class="prow-title">${esc(p.title||'—')}</span>
-        <span class="opt ${optCls(p.outcome)}">${esc(p.outcome)}</span>
+        <span class="opt ${optCls(p.outcome)}">${esc(outcomeLabel(p.title, p.outcome))}</span>
       </div>
       <div class="prow-sub">
         💵 <span class="num">${fmtUsd(invested)}</span> misés à ${Math.round((p.avgPrice||0)*100)}¢
@@ -926,7 +954,7 @@ function renderMe(w){
   const settledRow = s => `<div class="prow">
       <div class="prow-top">
         <span class="prow-title">${esc(s.title||'—')}</span>
-        <span class="opt ${optCls(s.outcome)}">${esc(s.outcome)}</span>
+        <span class="opt ${optCls(s.outcome)}">${esc(outcomeLabel(s.title, s.outcome))}</span>
         <span class="res ${s.won?'win':'loss'}">${s.won?'GAGNÉ':'PERDU'}</span>
       </div>
       <div class="prow-sub">${s.won
