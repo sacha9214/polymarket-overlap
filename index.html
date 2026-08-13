@@ -88,24 +88,28 @@
   .stat .v .sub{font-size:11px;font-weight:400;color:var(--muted);font-family:var(--sans)}
   .pos{color:var(--green)} .neg{color:var(--red)}
 
-  .card-foot{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .card-foot{display:flex;flex-direction:column;align-items:flex-start;gap:10px}
+  .card-foot details{width:100%}
   .card a.pm{color:var(--green);font-size:13px;text-decoration:none;font-weight:600}
   .card a.pm:hover{text-decoration:underline}
   details{flex:1}
   summary{color:var(--dim);font-size:13px;cursor:pointer;user-select:none;list-style:none}
   summary::before{content:'▸ '} details[open] summary::before{content:'▾ '}
   summary:hover{color:var(--muted)}
-  .brow{display:flex;align-items:center;gap:12px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--border)}
+  .brow{padding:10px 0;border-bottom:1px solid var(--border)}
   .brow:last-child{border-bottom:none}
+  .brow-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .brow .avatar{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;color:#0a0a0b;font-weight:700;flex-shrink:0}
-  .brow .wname{min-width:140px;color:#cfd4dc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .brow .wname{font-weight:600;color:#e2e6ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
+  .brow-sub{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:6px 0 0 32px;font-size:13px;color:var(--muted)}
+  .brow-sub .num{color:var(--text);font-weight:600;font-family:var(--mono)}
+  .brow-pct{display:flex;align-items:center;gap:8px;margin:6px 0 0 32px;font-size:12px;color:var(--dim)}
+  .pbar{width:110px;height:5px;border-radius:3px;background:var(--panel2);overflow:hidden;flex-shrink:0}
+  .pbar i{display:block;height:100%;border-radius:3px;background:var(--blue)}
   .opt{font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;letter-spacing:.5px;flex-shrink:0;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .opt.yes{background:var(--green-bg);color:var(--green)}
   .opt.no{background:var(--red-bg);color:var(--red)}
   .opt.other{background:rgba(139,147,161,.12);color:var(--muted)}
-  .brow .pnl{min-width:110px;font-family:var(--mono);font-size:12px}
-  .brow .shares{color:var(--muted);flex:1;font-size:12px}
-  .brow .val{font-weight:700;font-family:var(--mono);margin-left:auto}
 
   .empty{color:var(--muted);text-align:center;padding:60px 0;font-size:14px}
   .spinner{color:var(--green);text-align:center;padding:60px 0;font-size:14px;animation:pulse 1.2s infinite}
@@ -219,10 +223,11 @@ async function loadWallet(addr, i){
     }
   }
   const pnl = positions.reduce((s,p)=>s+(p.cashPnl||0),0);
+  const portfolio = positions.reduce((s,p)=>s+(p.currentValue||0),0); // valeur totale du wallet
   const lb = lbCache.get(addr.toLowerCase()) ?? null;
   const q = v => v>=0 ? Math.min(1, Math.log10(1+v)/6) : -Math.min(1, Math.log10(1-v)/6);
   const quality = lb ? (q(pnl)+q(lb.pnl))/2 : q(pnl);
-  return { addr, name, pnl, lb, quality, color: COLORS[i%COLORS.length], positions };
+  return { addr, name, pnl, portfolio, lb, quality, color: COLORS[i%COLORS.length], positions };
 }
 
 // ------- modèle proba -------
@@ -350,15 +355,28 @@ function render(){
         ${pmUrl(m)?`<a class="pm" target="_blank" href="${pmUrl(m)}">Trader sur Polymarket →</a>`:''}
         <details>
           <summary>détail des ${m.holders.length} wallets</summary>
-          ${[...m.holders].sort((a,b)=>b.value-a.value).map(h=>`
+          ${[...m.holders].sort((a,b)=>b.value-a.value).map(h=>{
+            const invested = h.shares * h.avg;                       // mise de départ
+            const perf = invested>0 ? (h.value-invested)/invested : 0;
+            const pct = h.wallet.portfolio>0 ? h.value/h.wallet.portfolio*100 : 0;
+            const pctTxt = pct>=1 ? Math.round(pct)+'%' : pct>=0.1 ? pct.toFixed(1)+'%' : '<0.1%';
+            return `
             <div class="brow">
-              <span class="avatar" style="background:${h.wallet.color}">${h.wallet.addr.slice(2,4).toUpperCase()}</span>
-              <span class="wname">${h.wallet.name}</span>
-              <span class="opt ${/^yes$/i.test(m.outcome)?'yes':/^no$/i.test(m.outcome)?'no':'other'}">a choisi ${m.outcome}</span>
-              <span class="pnl ${h.wallet.pnl<0?'neg':'pos'}">${h.wallet.pnl>=0?'+':'−'}${fmtUsd(Math.abs(h.wallet.pnl))}</span>
-              <span class="shares">${Math.round(h.shares).toLocaleString()} parts · entré à ${Math.round(h.avg*100)}¢</span>
-              <span class="val">${fmtUsd(h.value)}</span>
-            </div>`).join('')}
+              <div class="brow-top">
+                <span class="avatar" style="background:${h.wallet.color}">${h.wallet.addr.slice(2,4).toUpperCase()}</span>
+                <span class="wname">${h.wallet.name}</span>
+                <span class="opt ${/^yes$/i.test(m.outcome)?'yes':/^no$/i.test(m.outcome)?'no':'other'}">a choisi ${m.outcome}</span>
+              </div>
+              <div class="brow-sub">
+                💵 A misé <span class="num">${fmtUsd(invested)}</span> à ${Math.round(h.avg*100)}¢
+                → vaut <span class="num">${fmtUsd(h.value)}</span> aujourd'hui
+                <span class="${perf>=0?'pos':'neg'}">(${perf>=0?'+':'−'}${Math.abs(Math.round(perf*100))}%)</span>
+              </div>
+              <div class="brow-pct">
+                <span class="pbar"><i style="width:${Math.min(100,pct)}%"></i></span>
+                ${pctTxt} de son portefeuille (${fmtUsd(h.wallet.portfolio)})
+              </div>
+            </div>`;}).join('')}
         </details>
       </div>
     </div>`;
