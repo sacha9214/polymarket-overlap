@@ -99,6 +99,10 @@
   .brow:last-child{border-bottom:none}
   .brow .avatar{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;color:#0a0a0b;font-weight:700;flex-shrink:0}
   .brow .wname{min-width:140px;color:#cfd4dc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .opt{font-size:10px;font-weight:700;padding:2px 8px;border-radius:5px;letter-spacing:.5px;flex-shrink:0;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .opt.yes{background:var(--green-bg);color:var(--green)}
+  .opt.no{background:var(--red-bg);color:var(--red)}
+  .opt.other{background:rgba(139,147,161,.12);color:var(--muted)}
   .brow .pnl{min-width:110px;font-family:var(--mono);font-size:12px}
   .brow .shares{color:var(--muted);flex:1;font-size:12px}
   .brow .val{font-weight:700;font-family:var(--mono);margin-left:auto}
@@ -124,7 +128,8 @@
     <textarea id="input" placeholder="0x1234…, 0xabcd…"></textarea>
     <div class="search-actions">
       <button id="analyze">Analyser</button>
-      <button class="ghost" id="presetBtn">⚡ Top 10 traders de la semaine</button>
+      <button class="ghost" id="presetWeek">⚡ Top 50 de la semaine</button>
+      <button class="ghost" id="presetAll">🏆 Top 50 all-time</button>
       <button class="ghost" id="refreshBtn">↻</button>
       <span class="note" id="note"></span>
     </div>
@@ -179,7 +184,7 @@
 const API = 'https://data-api.polymarket.com';
 const GAMMA = 'https://gamma-api.polymarket.com';
 const nameCache = new Map();
-const weekPnlCache = new Map();
+const lbCache = new Map(); // addr -> {pnl, win:'week'|'all'} via leaderboard
 
 const COLORS = ['#22c55e','#eab308','#3b82f6','#ec4899','#a855f7','#f97316','#14b8a6','#f43f5e','#84cc16','#06b6d4'];
 let wallets = [], overlaps = [];
@@ -214,10 +219,10 @@ async function loadWallet(addr, i){
     }
   }
   const pnl = positions.reduce((s,p)=>s+(p.cashPnl||0),0);
-  const weekPnl = weekPnlCache.get(addr.toLowerCase()) ?? null;
+  const lb = lbCache.get(addr.toLowerCase()) ?? null;
   const q = v => v>=0 ? Math.min(1, Math.log10(1+v)/6) : -Math.min(1, Math.log10(1-v)/6);
-  const quality = weekPnl!=null ? (q(pnl)+q(weekPnl))/2 : q(pnl);
-  return { addr, name, pnl, weekPnl, quality, color: COLORS[i%COLORS.length], positions };
+  const quality = lb ? (q(pnl)+q(lb.pnl))/2 : q(pnl);
+  return { addr, name, pnl, lb, quality, color: COLORS[i%COLORS.length], positions };
 }
 
 // ------- modèle proba -------
@@ -285,7 +290,7 @@ function render(){
   const dl = m => daysLeft(m.endDate);
   let list = [];
   for(const m of overlaps){
-    const holders = onlyProfit ? m.holders.filter(h=>h.wallet.pnl>0 || (h.wallet.weekPnl??0)>0) : m.holders;
+    const holders = onlyProfit ? m.holders.filter(h=>h.wallet.pnl>0 || (h.wallet.lb?.pnl??0)>0) : m.holders;
     if(holders.length < minWallets) continue;
     if(query && !(m.title||'').toLowerCase().includes(query)) continue;
     if(filterDays){ const d = dl(m); if(d===null || d<0 || d>filterDays) continue; }
@@ -307,8 +312,8 @@ function render(){
   $('sortLabel').textContent = SORT_LABELS[sortBy];
   $('chips').innerHTML = wallets.map(w =>
     `<span class="chip"><span class="avatar" style="background:${w.color}">${w.addr.slice(2,4).toUpperCase()}</span>${w.name}
-     <span class="wpnl ${(w.weekPnl??w.pnl)>=0?'pos':'neg'}">${w.weekPnl!=null
-       ? (w.weekPnl>=0?'+':'−')+fmtUsd(Math.abs(w.weekPnl))+'/sem'
+     <span class="wpnl ${(w.lb?.pnl??w.pnl)>=0?'pos':'neg'}">${w.lb
+       ? (w.lb.pnl>=0?'+':'−')+fmtUsd(Math.abs(w.lb.pnl))+(w.lb.win==='week'?'/sem':' all-time')
        : (w.pnl>=0?'+':'−')+fmtUsd(Math.abs(w.pnl))}</span></span>`).join('');
 
   $('results').innerHTML = list.length ? list.map((m,i) => {
@@ -342,6 +347,7 @@ function render(){
             <div class="brow">
               <span class="avatar" style="background:${h.wallet.color}">${h.wallet.addr.slice(2,4).toUpperCase()}</span>
               <span class="wname">${h.wallet.name}</span>
+              <span class="opt ${/^yes$/i.test(m.outcome)?'yes':/^no$/i.test(m.outcome)?'no':'other'}">a choisi ${m.outcome}</span>
               <span class="pnl ${h.wallet.pnl<0?'neg':'pos'}">${h.wallet.pnl>=0?'+':'−'}${fmtUsd(Math.abs(h.wallet.pnl))}</span>
               <span class="shares">${Math.round(h.shares).toLocaleString()} parts · entré à ${Math.round(h.avg*100)}¢</span>
               <span class="val">${fmtUsd(h.value)}</span>
@@ -369,7 +375,13 @@ async function analyze(){
   $('modelnote').style.display='block';
   $('livepill').style.display='inline-flex';
   try{
-    wallets = await Promise.all(addrs.map((a,i)=>loadWallet(a,i)));
+    // chargement par lots de 10 pour ménager l'API (jusqu'à 50 wallets)
+    wallets = [];
+    for(let i=0; i<addrs.length; i+=10){
+      const chunk = addrs.slice(i, i+10);
+      wallets.push(...await Promise.all(chunk.map((a,j)=>loadWallet(a, i+j))));
+      $('results').innerHTML = `<div class="spinner">Chargement… ${wallets.length}/${addrs.length} wallets</div>`;
+    }
     overlaps = computeOverlaps(wallets);
     render();
     $('note').textContent = 'MAJ '+new Date().toLocaleTimeString();
@@ -382,13 +394,15 @@ async function analyze(){
 
 $('analyze').onclick = analyze;
 $('refreshBtn').onclick = analyze;
-$('presetBtn').onclick = async () => {
+async function loadPreset(win){
   $('note').textContent = 'Chargement du leaderboard…';
   try{
-    const lb = await fetchJson(`${API}/v1/leaderboard?limit=10&window=week`);
+    const lb = await fetchJson(`${API}/v1/leaderboard?limit=50&timePeriod=${win}`);
     lb.forEach(u => {
-      if(u.userName) nameCache.set(u.proxyWallet.toLowerCase(), u.userName);
-      if(u.pnl!=null) weekPnlCache.set(u.proxyWallet.toLowerCase(), u.pnl);
+      const a = u.proxyWallet.toLowerCase();
+      // ignorer les pseudos auto-générés type "0x…-timestamp" : on ira chercher le vrai pseudonyme
+      if(u.userName && !/^0x[0-9a-fA-F]{40}/.test(u.userName)) nameCache.set(a, u.userName);
+      if(u.pnl!=null) lbCache.set(a, {pnl:u.pnl, win});
     });
     $('input').value = lb.map(u=>u.proxyWallet).join('\n');
     analyze();
@@ -396,7 +410,9 @@ $('presetBtn').onclick = async () => {
     $('error').textContent = 'Impossible de charger le leaderboard : '+e.message;
     $('error').style.display='block';
   }
-};
+}
+$('presetWeek').onclick = () => loadPreset('week');
+$('presetAll').onclick = () => loadPreset('all');
 
 $('sortSel').onchange = e => { sortBy = e.target.value; render(); };
 $('daysSel').onchange = e => { filterDays = +e.target.value; render(); };
@@ -411,7 +427,7 @@ $('autoRefresh').onchange = e => {
 
 const saved = localStorage.getItem('pmo_input');
 if(saved) $('input').value = saved;
-if(location.hash.includes('preset')) $('presetBtn').click();
+if(location.hash.includes('preset')) loadPreset('week');
 else if(saved) analyze();
 </script>
 </body>
