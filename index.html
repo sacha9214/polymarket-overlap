@@ -122,6 +122,30 @@
   .opt.no{background:var(--red-bg);color:var(--red)}
   .opt.other{background:rgba(139,147,161,.12);color:var(--muted)}
 
+  /* ---- onglets & mon portefeuille ---- */
+  .tabs{display:flex;gap:8px;margin-bottom:18px}
+  .tab{background:transparent;border:1px solid var(--border);color:var(--muted);font-weight:600;font-size:13px;padding:9px 16px;border-radius:10px}
+  .tab.on{background:var(--green-bg);border-color:rgba(34,197,94,.4);color:var(--green)}
+  .mehead{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+  .mehead input{flex:1;min-width:240px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:var(--mono);font-size:13px;padding:10px 12px}
+  .mehead input:focus{outline:none;border-color:var(--green)}
+  .claim{background:var(--green-bg);border:1px solid rgba(34,197,94,.35);border-radius:12px;padding:14px 16px;margin-bottom:14px;font-size:14px;line-height:1.6}
+  .claim a{color:var(--green);font-weight:700}
+  .mesec{margin:22px 0 10px;font-size:14px;font-weight:700}
+  .mesec span{color:var(--dim);font-weight:400;font-size:12px}
+  .prow{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:8px}
+  .prow-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .prow-title{font-weight:600;font-size:14px;flex:1;min-width:200px}
+  .prow-sub{font-size:13px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .prow-sub .num{color:var(--text);font-weight:600;font-family:var(--mono)}
+  .xref{margin-top:8px;font-size:12.5px;padding:7px 10px;border-radius:8px;line-height:1.5}
+  .xref.with{background:var(--green-bg);color:var(--green)}
+  .xref.against{background:var(--red-bg);color:var(--red)}
+  .xref.none{background:rgba(139,147,161,.10);color:var(--dim)}
+  .res{font-size:11px;font-weight:800;padding:3px 10px;border-radius:6px}
+  .res.win{background:var(--green-bg);color:var(--green)}
+  .res.loss{background:var(--red-bg);color:var(--red)}
+
   .empty{color:var(--muted);text-align:center;padding:60px 0;font-size:14px}
   .spinner{color:var(--green);text-align:center;padding:60px 0;font-size:14px;animation:pulse 1.2s infinite}
   .error{color:var(--red);padding:14px;background:var(--red-bg);border:1px solid rgba(239,68,68,.3);border-radius:10px;margin-bottom:16px;font-size:13px;line-height:1.6;display:none}
@@ -155,6 +179,22 @@
   <div class="relaynote" id="relayNote"></div>
   <div class="scoreboard" id="scoreboard"></div>
 
+  <div class="tabs">
+    <button class="tab on" id="tabOpp">🎯 Opportunités</button>
+    <button class="tab" id="tabMe">👤 Mon portefeuille</button>
+  </div>
+
+  <div id="meView" style="display:none">
+    <div class="mehead">
+      <input type="text" id="meAddr" placeholder="Ton adresse Polymarket (0x…) — visible dans l'URL de ton profil">
+      <button id="meLoad">Voir mes paris</button>
+    </div>
+    <p class="modelnote" style="display:block">Lecture seule : aucune connexion de wallet, aucune signature. Ton adresse reste dans ce navigateur.
+      Trouve-la sur <a href="https://polymarket.com/portfolio" target="_blank" rel="noopener noreferrer" style="color:var(--green)">polymarket.com/portfolio</a> — c'est le 0x… dans l'URL de ton profil.</p>
+    <div id="meResults"></div>
+  </div>
+
+  <div id="oppView">
   <div class="controls" id="controls">
     <div class="ctl">Classement
       <select id="sortSel">
@@ -203,6 +243,7 @@
   <p class="modelnote" id="modelnote">La <b>proba estimée</b> part du prix du marché et l'ajuste (±12 pts max) selon le <b>palmarès réel</b> des wallets positionnés — trades clos gagnants/perdants reconstruits depuis leur historique — leur conviction (part de leur portefeuille engagée) et leur prix d'entrée. <span class="pos">ACHETER</span> = le smart money voit plus haut que le marché · <span class="neg">ÉVITER</span> = les wallets dessus perdent ou sont mal entrés. Heuristique — pas un conseil financier.</p>
 
   <div id="results"></div>
+  </div>
 </main>
 <footer>Données live · data-api / clob.polymarket.com · non affilié à Polymarket<br>Pas un conseil financier. Ne mise que ce que tu peux perdre.</footer>
 
@@ -318,6 +359,14 @@ function trackRecord(activity, positions){
   }
   let trades=0, wins=0, realized=0;
   const lastBuy = new Map();
+  // Les paris GAGNÉS sont réclamés puis disparaissent des positions : seuls les
+  // perdants y restent. On garde donc les remboursements pour pouvoir montrer
+  // les victoires, sinon l'utilisateur ne verrait que ses défaites.
+  const redeems = [];
+  for(const e of activity){
+    if(e.type==='REDEEM' && (e.usdcSize||0) > 1)
+      redeems.push({title:e.title, outcome:e.outcome, amount:e.usdcSize, ts:e.timestamp});
+  }
   for(const [key,a] of byAsset){
     if(a.lastBuy) lastBuy.set(key, a.lastBuy);
     // On ne score que les paris ouverts ET refermés dans la fenêtre observée :
@@ -337,7 +386,7 @@ function trackRecord(activity, positions){
     trades++; if(won) wins++; realized += (p.cashPnl||0);
   }
   const days = oldest===Infinity ? null : Math.max(1, Math.round((Date.now()/1000 - oldest)/86400));
-  return { trades, wins, realized, winRate: trades ? wins/trades : null, days, lastBuy };
+  return { trades, wins, realized, winRate: trades ? wins/trades : null, days, lastBuy, redeems };
 }
 
 // Qualité dans [-1,1] : palmarès réel d'abord, leaderboard ensuite, sinon neutre.
@@ -658,6 +707,134 @@ function render(){
   recordPredictions(list);
 }
 
+// ---------- mon portefeuille ----------
+// Tout est public en lecture par adresse : aucune connexion de wallet n'est nécessaire
+// (et l'adresse Polymarket est un contrat proxy, différent de l'adresse MetaMask).
+
+// Où en sont les traders suivis sur les marchés où je suis engagé ?
+function smartMap(){
+  const m = new Map(); // conditionId -> Map(outcome -> {n, value, names})
+  for(const w of wallets) for(const p of w.positions){
+    if(!p.conditionId || (p.currentValue||0) < 1) continue;
+    if(!m.has(p.conditionId)) m.set(p.conditionId, new Map());
+    const om = m.get(p.conditionId);
+    if(!om.has(p.outcome)) om.set(p.outcome, {n:0, value:0, names:[]});
+    const e = om.get(p.outcome);
+    e.n++; e.value += p.currentValue; e.names.push(w.name);
+  }
+  return m;
+}
+
+function xrefHtml(p, sm){
+  if(!wallets.length) return '';
+  const om = sm.get(p.conditionId);
+  if(!om) return `<div class="xref none">Aucun trader suivi n'est positionné sur ce marché.</div>`;
+  const same = om.get(p.outcome);
+  const opp  = [...om.entries()].filter(([o]) => o !== p.outcome);
+  const oppN = opp.reduce((s,[,e])=>s+e.n, 0);
+  if(same && !oppN)
+    return `<div class="xref with">✅ <b>${same.n} trader${same.n>1?'s':''} suivi${same.n>1?'s':''}</b> ${same.n>1?'sont':'est'} sur la même issue que toi (${fmtUsd(same.value)} engagés) — ${esc(same.names.slice(0,3).join(', '))}.</div>`;
+  if(same && oppN)
+    return `<div class="xref none">⚖️ Avis partagés : ${same.n} avec toi, ${oppN} sur « ${esc(opp[0][0])} ».</div>`;
+  return `<div class="xref against">⚠️ <b>${oppN} trader${oppN>1?'s':''} suivi${oppN>1?'s':''}</b> ${oppN>1?'parient':'parie'} sur « ${esc(opp[0][0])} » — l'issue opposée à la tienne (${fmtUsd(opp.reduce((s,[,e])=>s+e.value,0))} engagés).</div>`;
+}
+
+function renderMe(w){
+  const sm = smartMap();
+  const open     = w.positions.filter(p => p.redeemable !== true && (p.currentValue||0) >= 0.01);
+  const openVal  = open.reduce((s,p)=>s+(p.currentValue||0),0);
+  const openPnl  = open.reduce((s,p)=>s+(p.cashPnl||0),0);
+  const tr = w.tr;
+
+  // Paris tranchés = perdants encore en portefeuille (jamais réclamés, ils ne valent rien)
+  // + gagnants déjà encaissés, qui ont quitté le portefeuille lors de la réclamation.
+  const settled = [
+    ...w.positions.filter(p => p.redeemable === true && (p.currentValue||0) < 0.01)
+        .map(p => ({title:p.title, outcome:p.outcome, won:false,
+                    invested:(p.size||0)*(p.avgPrice||0), amount:0})),
+    ...w.positions.filter(p => p.redeemable === true && (p.currentValue||0) >= 0.01)
+        .map(p => ({title:p.title, outcome:p.outcome, won:true, unclaimed:true,
+                    invested:(p.size||0)*(p.avgPrice||0), amount:p.currentValue})),
+    ...((tr && tr.redeems) || []).map(r => ({title:r.title, outcome:r.outcome, won:true, amount:r.amount}))
+  ];
+  const unclaimed = settled.filter(s => s.unclaimed);
+  const wins = settled.filter(s => s.won).length;
+
+  const optCls = o => /^yes$/i.test(o)?'yes':/^no$/i.test(o)?'no':'other';
+
+  const openRow = p => {
+    const invested = (p.size||0) * (p.avgPrice||0);
+    const perf = invested>0 ? ((p.currentValue||0)-invested)/invested : 0;
+    return `<div class="prow">
+      <div class="prow-top">
+        <span class="prow-title">${esc(p.title||'—')}</span>
+        <span class="opt ${optCls(p.outcome)}">${esc(p.outcome)}</span>
+      </div>
+      <div class="prow-sub">
+        💵 <span class="num">${fmtUsd(invested)}</span> misés à ${Math.round((p.avgPrice||0)*100)}¢
+        → vaut <span class="num">${fmtUsd(p.currentValue||0)}</span> à ${Math.round((p.curPrice||0)*100)}¢
+        <span class="${perf>=0?'pos':'neg'}">(${perf>=0?'+':'−'}${Math.abs(Math.round(perf*100))}%)</span>
+      </div>
+      ${xrefHtml(p, sm)}
+    </div>`;
+  };
+
+  const settledRow = s => `<div class="prow">
+      <div class="prow-top">
+        <span class="prow-title">${esc(s.title||'—')}</span>
+        <span class="opt ${optCls(s.outcome)}">${esc(s.outcome)}</span>
+        <span class="res ${s.won?'win':'loss'}">${s.won?'GAGNÉ':'PERDU'}</span>
+      </div>
+      <div class="prow-sub">${s.won
+        ? (s.unclaimed
+            ? `🎉 <span class="num pos">${fmtUsd(s.amount)}</span> à récupérer — pas encore réclamés`
+            : `🎉 <span class="num pos">${fmtUsd(s.amount)}</span> encaissés`)
+        : `💵 <span class="num">${fmtUsd(s.invested)}</span> misés — <span class="neg">perdus</span>`}
+      </div>
+    </div>`;
+
+  $('meResults').innerHTML = `
+    <div class="statrow">
+      <div class="stat"><div class="k">Positions ouvertes</div><div class="v">${fmtUsd(openVal)} <span class="sub">${open.length} pari${open.length>1?'s':''}</span></div></div>
+      <div class="stat"><div class="k">Plus/moins-value en cours</div><div class="v ${openPnl>=0?'pos':'neg'}">${openPnl>=0?'+':'−'}${fmtUsd(Math.abs(openPnl))}</div></div>
+      <div class="stat"><div class="k">Paris tranchés</div><div class="v">${settled.length} <span class="sub">${wins} gagné${wins>1?'s':''}</span></div></div>
+      <div class="stat"><div class="k">Ton palmarès</div><div class="v ${(tr&&tr.realized>=0)?'pos':'neg'}">${
+        tr && tr.trades>=1 ? `${Math.round(tr.winRate*100)}% <span class="sub">${tr.realized>=0?'+':'−'}${fmtUsd(Math.abs(tr.realized))} sur ${tr.trades} paris</span>` : '—'}</div></div>
+    </div>
+
+    ${unclaimed.length ? `<div class="claim">💰 <b>Tu as ${fmtUsd(unclaimed.reduce((s,p)=>s+p.amount,0))} de gains non réclamés</b>
+      sur ${unclaimed.length} pari${unclaimed.length>1?'s':''} gagné${unclaimed.length>1?'s':''} — l'argent ne t'est versé qu'après réclamation.
+      <a href="https://polymarket.com/portfolio" target="_blank" rel="noopener noreferrer">Aller les récupérer →</a></div>` : ''}
+
+    <div class="mesec">Positions ouvertes <span>· ${wallets.length ? 'croisées avec les '+wallets.length+' traders analysés' : 'lance une analyse dans l\'onglet Opportunités pour voir ce que le smart money en pense'}</span></div>
+    ${open.length ? [...open].sort((a,b)=>b.currentValue-a.currentValue).map(openRow).join('') : '<div class="empty">Aucune position ouverte.</div>'}
+
+    <div class="mesec">Paris déjà tranchés <span>· ${wins}/${settled.length} gagnés · historique récent</span></div>
+    ${settled.length ? [...settled].sort((a,b)=>(b.amount||b.invested||0)-(a.amount||a.invested||0)).slice(0,40).map(settledRow).join('') : '<div class="empty">Aucun pari résolu pour l\'instant.</div>'}`;
+}
+
+async function loadMe(){
+  const addr = ($('meAddr').value||'').trim();
+  if(!/^0x[0-9a-fA-F]{40}$/.test(addr)){
+    $('meResults').innerHTML = '<div class="error" style="display:block">Adresse invalide : il faut une adresse 0x… de 42 caractères (celle de l\'URL de ton profil Polymarket).</div>';
+    return;
+  }
+  localStorage.setItem('pmo_me', addr);
+  $('meResults').innerHTML = '<div class="spinner">Chargement de tes paris…</div>';
+  try{
+    renderMe(await loadWallet(addr, 0));
+  }catch(e){
+    $('meResults').innerHTML = `<div class="error" style="display:block">${netErrMsg(e)}</div>`;
+  }
+}
+
+function showView(v){
+  $('meView').style.display  = v==='me'  ? 'block' : 'none';
+  $('oppView').style.display = v==='opp' ? 'block' : 'none';
+  $('tabMe').classList.toggle('on', v==='me');
+  $('tabOpp').classList.toggle('on', v==='opp');
+}
+
 // ---------- actions ----------
 // Jeton de session : si un nouveau chargement démarre (clic, refresh, auto-refresh),
 // l'ancien est abandonné au lieu d'écraser les résultats du nouveau.
@@ -741,7 +918,14 @@ $('autoRefresh').onchange = e => {
   if(e.target.checked) autoTimer = setInterval(()=>{ if(wallets.length) analyze(); }, 60000);
 };
 
+$('tabOpp').onclick = () => showView('opp');
+$('tabMe').onclick  = () => showView('me');
+$('meLoad').onclick = loadMe;
+$('meAddr').onkeydown = e => { if(e.key==='Enter') loadMe(); };
+
 renderScoreboard();
+const savedMe = localStorage.getItem('pmo_me');
+if(savedMe){ $('meAddr').value = savedMe; loadMe(); }
 const saved = localStorage.getItem('pmo_input');
 if(saved) $('input').value = saved;
 if(location.hash.includes('preset')) loadPreset('week');
