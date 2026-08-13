@@ -246,7 +246,7 @@ function computeOverlaps(ws){
       if(!p.conditionId || (p.currentValue||0) < 1) continue;
       const key = p.conditionId + '|' + p.outcome;
       if(!map.has(key)) map.set(key, {
-        title: p.title, outcome: p.outcome, slug: p.slug || p.eventSlug,
+        title: p.title, outcome: p.outcome, slug: p.slug, eventSlug: p.eventSlug,
         endDate: p.endDate, price: p.curPrice, holders: []
       });
       map.get(key).holders.push({ wallet: w, shares: p.size, avg: p.avgPrice, value: p.currentValue });
@@ -267,6 +267,13 @@ function metrics(m, holders){
 }
 
 // ------- rendu -------
+// L'URL /event/ attend l'eventSlug ; le slug du marché seul fait 404.
+// /event/<eventSlug>/<marketSlug> pointe directement sur le bon marché de l'événement.
+function pmUrl(m){
+  if(m.eventSlug) return `https://polymarket.com/event/${m.eventSlug}${m.slug && m.slug!==m.eventSlug ? '/'+m.slug : ''}`;
+  return m.slug ? `https://polymarket.com/event/${m.slug}` : null;
+}
+
 function verdictOf(m){
   const pts = Math.round(m.edge*100);
   if(m.price==null || m.price<=0.01 || m.price>=0.99) return {cls:'hold', label:'SUIVRE', pts};
@@ -340,7 +347,7 @@ function render(){
           <div class="v">${m.potentialGain>0?'+'+fmtUsd(m.potentialGain):'—'}</div></div>
       </div>
       <div class="card-foot">
-        ${m.slug?`<a class="pm" target="_blank" href="https://polymarket.com/event/${m.slug}">Trader sur Polymarket →</a>`:''}
+        ${pmUrl(m)?`<a class="pm" target="_blank" href="${pmUrl(m)}">Trader sur Polymarket →</a>`:''}
         <details>
           <summary>détail des ${m.holders.length} wallets</summary>
           ${[...m.holders].sort((a,b)=>b.value-a.value).map(h=>`
